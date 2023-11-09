@@ -21,12 +21,9 @@ async function main() {
     }))
 
     // TODO: Adjust the amount of satoshis locked in the smart contract:
-    const amount = 100
+    const amount = 1
 
-    const instance = new Todolist(
-        // TODO: Pass constructor parameter values.
-        0n
-    )
+    const instance = new Todolist()
 
     // Connect to a signer.
     await instance.connect(signer)

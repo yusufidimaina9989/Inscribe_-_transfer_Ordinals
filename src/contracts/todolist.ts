@@ -1,32 +1,61 @@
 import {
-    method,
-    prop,
-    SmartContract,
-    hash256,
-    assert,
-    SigHash
+  method,
+  prop,
+  SmartContract,
+  hash256,
+  assert,
+  ByteString,
+  FixedArray,
+  toByteString,
+  fill,
 } from 'scrypt-ts'
 
-import type {ByteString} from 'scrypt-ts';
+export type Task = {
+  name: ByteString
+  isCompleted: boolean
+}
+
 
 export class Todolist extends SmartContract {
-    @prop(true)
-    count: bigint
 
-    constructor(count: bigint) {
-        super(count)
-        this.count = count
-    }
+  static readonly TASK_COUNT = 20
 
-    @method(SigHash.SINGLE)
-    public increment() {
-        this.count++
+  @prop(true)
+  tasks: FixedArray<Task, typeof Todolist.TASK_COUNT>
 
-        // make sure balance in the contract does not change
-        const amount: bigint = this.ctx.utxo.value
-        // output containing the latest state
-        const output: ByteString = this.buildStateOutput(amount)
-        // verify current tx has this single output
-        assert(this.ctx.hashOutputs === hash256(output), 'hashOutputs mismatch')
-    }
+ constructor() {
+      super(...arguments)
+      this.tasks = fill(
+          {
+              name: toByteString(''),
+              isCompleted: true
+          },
+          Todolist.TASK_COUNT
+     )
+  }
+
+  @method()
+  public addTask(task: Task, taskIdx: bigint) {
+      assert(this.tasks[Number(taskIdx)].isCompleted, 'task slot not empty')
+
+      assert(task.name != toByteString(''), 'task should not be empty')
+
+      this.tasks[Number(taskIdx)] = task
+
+      let outputs = this.buildStateOutput(this.ctx.utxo.value)
+      outputs += this.buildChangeOutput()
+      assert(hash256(outputs) == this.ctx.hashOutputs, 'hashOutputs mismatch')
+  }
+
+  @method()
+  public taskCompleted(taskIdx: bigint) {
+      const task = this.tasks[Number(taskIdx)]
+
+      this.tasks[Number(taskIdx)].isCompleted = true
+
+      let outputs = this.buildStateOutput(this.ctx.utxo.value)
+      outputs += this.buildChangeOutput()
+      assert(hash256(outputs) == this.ctx.hashOutputs, 'hashOutputs mismatch')
+  }
+
 }
