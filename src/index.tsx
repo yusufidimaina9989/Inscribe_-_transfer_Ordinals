@@ -3,26 +3,20 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
-import { Scrypt, bsv } from 'scrypt-ts';
+import { PandaProvider } from 'panda-wallet-provider/dist/context/PandaWalletContext';
 
-import { Todolist } from './contracts/todolist';
-import artifact from '../artifacts/todolist.json';
+import { OrdinalLock } from './contracts/ordinalLock';
+import artifact from '../artifacts/ordinalLock.json';
 
-Todolist.loadArtifact(artifact);
-
-Scrypt.init({
-  // https://docs.scrypt.io/advanced/how-to-integrate-scrypt-service#get-your-api-key
-  apiKey: process.env.REACT_APP_API_KEY || '',
-  network: bsv.Networks.testnet
-})
+OrdinalLock.loadArtifact(artifact);
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );
 root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
+  <PandaProvider>
+  <App />
+</PandaProvider>
 );
 
 // If you want to start measuring performance in your app, pass a function

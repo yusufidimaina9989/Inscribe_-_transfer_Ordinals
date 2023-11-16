@@ -1,176 +1,254 @@
-import React, { useEffect, useRef, useState } from "react";
-import TaskList from "./TaskList";
-import NewTask from "./NewTask";
-import {
-  ScryptProvider,
-  SensiletSigner,
-  Scrypt,
-  ContractCalledEvent,
-  toByteString,
-  MethodCallOptions,
-  toHex,
-  bsv,
-} from "scrypt-ts";
-import { Task, Todolist } from "./contracts/todolist";
-import { Typography, Card, CardContent } from "@mui/material";
+// App.tsx
+import React, { useEffect, useRef, useState } from 'react';
+import { Addr, PandaSigner, PubKey, UTXO, bsv, findSig } from 'scrypt-ts';
+import { OneSatApis, OrdiMethodCallOptions, OrdiNFTP2PKH, OrdiProvider } from 'scrypt-ord';
+import { Box, Button, Tab, Tabs } from '@mui/material';
+import ItemViewWallet from './ItemViewWallet';
+import { OrdinalLock } from './contracts/ordinalLock';
+import ItemViewMarket from './ItemViewMarket';
 
-// `npm run deploycontract` to get deployment transaction id
-const contract_id = {
-  /** The deployment transaction id */
-  txId: "89fa1730bfd02dd3474c7345b7d522363aa5e9b13a353d684c440f4df62938f2",
-  // txId : "e396ff41896859bf2cc5607459bc4cd33b6beb32688aec3765f0e64a9e24888e",
-  /** The output index */
-  outputIndex: 0,
-};
 
 const App: React.FC = () => {
-  const signerRef = useRef<SensiletSigner>();
-  const [contractInstance, setContract] = useState<Todolist>();
-  const [Address, setAddress] = useState("");
+  const signerRef = useRef<PandaSigner>();
+
+  const [isConnected, setIsConnected] = useState(false)
+
+  const [connectedOrdiAddress, setConnectedOrdiAddress] = useState(undefined)
+
+  const [walletItems, setWalletItems] = useState([])
+  const [marketItems, setMarketItems] = useState([])
+
+  const [activeTab, setActiveTab] = useState(0);
 
   useEffect(() => {
-    const provider = new ScryptProvider();
-    const signer = new SensiletSigner(provider);
-
-    signerRef.current = signer;
-
-    fetchContract();
-
-    const subscription = Scrypt.contractApi.subscribe(
-      {
-        clazz: Todolist,
-        id: contract_id,
-      },
-      (event: ContractCalledEvent<Todolist>) => {
-        setContract(event.nexts[0]);
-      }
-    );
-
-    return () => {
-      subscription.unsubscribe();
-    };
+    loadMarketItems()
   }, []);
 
-  async function fetchContract() {
-    try {
-      const instance = await Scrypt.contractApi.getLatestInstance(
-        Todolist,
-        contract_id
-      );
-      setContract(instance);
-    } catch (error: any) {
-      alert("Error Fetching the Contract ");
-      console.error("fetchContract error: ", error);
+  async function loadWalletItems() {
+    const signer = signerRef.current as PandaSigner;
+  
+    if (signer) {
+      try {
+        const connectedOrdiAddressStr = connectedOrdiAddress.toString();
+  
+        // Validate the Bitcoin address
+        if (!isValidBitcoinAddress(connectedOrdiAddressStr)) {
+          throw new Error('Invalid Bitcoin address');
+        }
+  
+        const url = `https://ordinals.gorillapool.io/api/txos/address/${connectedOrdiAddressStr}/unspent?bsv20=false`;
+  
+        const response = await fetch(url);
+  
+        if (!response.ok) {
+          throw new Error(`Failed to fetch data. Status: ${response.status}`);
+        }
+  
+        const data = await response.json();
+  
+        const filteredData = data
+          .filter(e => e.origin && e.origin.data && e.origin.data.insc && e.origin.data.insc.file && e.origin.data.insc.file.type !== 'application/bsv-20')
+          .filter(e => marketItems[e.origin.outpoint] === undefined);
+  
+        setWalletItems(filteredData);
+      } catch (error) {
+        console.error('Error fetching wallet items:', error.message);
+      }
+    }
+  }
+  
+  // Example address validation function
+  function isValidBitcoinAddress(address) {
+    // Implement your address validation logic here
+    // You may use a library or a regex to validate the address
+    return true; // Replace with your validation check
+  }
+  
+  
+  
+
+  async function loadMarketItems() {
+    const marketItemsRaw = localStorage.getItem('marketItems')
+    if (marketItemsRaw) {
+      const marketItems = JSON.parse(marketItemsRaw)
+      setMarketItems(marketItems)
     }
   }
 
-  const handleCompleted = async (idx: number) => {
-    const signer = signerRef.current as SensiletSigner;
-
-    if (contractInstance && signer) {
-      const { isAuthenticated, error } = await signer.requestAuth();
-      const owner = await signer.getDefaultPubKey();
-      if (!isAuthenticated) {
-        throw new Error(error);
-      }
-
-      await contractInstance.connect(signer);
-
-      // Create the next instance from the current.
-      const nextInstance = contractInstance.next();
-      // Set empty slot for next instance.
-      nextInstance.tasks[idx].isCompleted = true;
-
-      // Call the method of current instance to apply the updates on chain.
-      contractInstance.methods
-        .taskCompleted(BigInt(idx), {
-          changeAddress: await signer.getDefaultAddress(),
-          next: {
-            instance: nextInstance,
-            balance: contractInstance.balance,
-          },
-        } as MethodCallOptions<Todolist>)
-        .then((result) => {
-          console.log(`Task Completed: ${result.tx.id}`);
-          alert("Task Completed Successfully");
-        })
-        .catch((e) => {
-          console.error("Error in Completing the task: ", e);
-        });
+  function storeMarketItem(ordLockTx: bsv.Transaction, price: number, seller: string, item: any) {
+    let marketItems: any = localStorage.getItem('marketItems')
+    if (!marketItems) {
+      marketItems = {}
+    } else {
+      marketItems = JSON.parse(marketItems)
     }
+
+    marketItems[item.origin.outpoint] = {
+      txId: ordLockTx.id,
+      vout: 0,
+      price: price,
+      seller: seller,
+      item: item
+    }
+
+    localStorage.setItem('marketItems', JSON.stringify(marketItems));
+    setMarketItems(marketItems)
+  }
+
+  function removeMarketItem(originOutpoint: string) {
+    let marketItems: any = localStorage.getItem('marketItems')
+    if (!marketItems) {
+      marketItems = {}
+    } else {
+      marketItems = JSON.parse(marketItems)
+    }
+
+    delete marketItems[originOutpoint]
+
+    localStorage.setItem('marketItems', JSON.stringify(marketItems));
+    setMarketItems(marketItems)
+  }
+
+  const handleList = async (idx: number, priceSats: number) => {
+    const signer = signerRef.current as PandaSigner;
+
+    const item = walletItems[idx]
+    const outpoint = item.outpoint
+
+    // Create a P2PKH object from a UTXO.
+    OneSatApis.setNetwork(bsv.Networks.testnet)
+    const utxo: UTXO = await OneSatApis.fetchUTXOByOutpoint(outpoint)
+    const p2pkh = OrdiNFTP2PKH.fromUTXO(utxo)
+
+    // Construct recipient smart contract - the ordinal lock.
+    const ordPublicKey = await signer.getOrdPubKey()
+    const seller = PubKey(ordPublicKey.toByteString())
+    const amount = BigInt(priceSats)
+    const ordLock = new OrdinalLock(seller, amount)
+    await ordLock.connect(signer)
+
+    // Unlock deployed NFT and send it to the recipient ordinal lock contract.
+    await p2pkh.connect(signer)
+
+    const { tx: transferTx } = await p2pkh.methods.unlock(
+      (sigResps) => findSig(sigResps, ordPublicKey),
+      seller,
+      {
+        transfer: ordLock,
+        pubKeyOrAddrToSign: ordPublicKey,
+      } as OrdiMethodCallOptions<OrdiNFTP2PKH>
+    );
+
+    console.log("Transferred NFT: ", transferTx.id);
+
+    // Store reference in local storage.
+    storeMarketItem(transferTx, priceSats, seller, item)
   };
 
-  const handleAdd = async (newItem: { name: string }) => {
-    const signer = signerRef.current as SensiletSigner;
-    const Address = await signer.getDefaultAddress();
-    setAddress(toHex(Address));
-    if (contractInstance && signer) {
-      const { isAuthenticated, error } = await signer.requestAuth();
-      if (!isAuthenticated) {
-        throw new Error(error);
-      }
+  const handleBuy = async (marketItem: any) => {
+    const signer = signerRef.current as PandaSigner;
+    await signer.connect()
 
-      await contractInstance.connect(signer);
+    const tx = await signer.provider.getTransaction(marketItem.txId)
+    const instance = OrdinalLock.fromTx(tx, 0)
 
-      // Create the next instance from the current.
-      const nextInstance = contractInstance.next();
+    await instance.connect(signer)
 
-      // Construct new item object.
-      const toAdd: Task = {
-        name: toByteString(newItem.name, true),
-        isCompleted: false,
-      };
+    const buyerPublicKey = await signer.getOrdPubKey()
+    
+    const receiverAddr = Addr(buyerPublicKey.toAddress().toByteString())
+    
+    const callRes = await instance.methods.purchase(
+      receiverAddr
+    )
 
-      // Find first empty slot and insert new item.
-      let itemIdx = undefined;
-      for (let i = 0; i < Todolist.TASK_COUNT; i++) {
-        const item = contractInstance.tasks[i];
-        if (item.isCompleted) {
-          itemIdx = BigInt(i);
-          nextInstance.tasks[i] = toAdd;
-          break;
-        }
-      }
+    console.log("Purchase call: ", callRes.tx.id);
 
-      if (itemIdx === undefined) {
-        console.error("All Task slots are filled.");
-        return;
-      }
+    // Remove market item.
+    removeMarketItem(marketItem.item.origin.outpoint)
+  }
 
-      // Call the method of current instance to apply the updates on chain.
-      contractInstance.methods
-        .addTask(toAdd, itemIdx, {
-          next: {
-            instance: nextInstance,
-            balance: contractInstance.balance,
-          },
-        })
-        .then((result) => {
-          console.log(`Task Added: ${result.tx.id}`);
-          alert("Task Added Successfully");
-        })
-        .catch((e) => {
-          console.error("Error in Adding Task : ", e);
-        });
+  const handleCancel = async (marketItem: any) => {
+    const signer = signerRef.current as PandaSigner;
+    await signer.connect()
+
+    const tx = await signer.provider.getTransaction(marketItem.txId)
+    const instance = OrdinalLock.fromTx(tx, 0)
+
+    await instance.connect(signer)
+
+    const sellerPublicKey = await signer.getOrdPubKey()
+
+    const callRes = await instance.methods.cancel(
+      (sigResps) => findSig(sigResps, sellerPublicKey),
+      {
+        pubKeyOrAddrToSign: sellerPublicKey,
+      } as OrdiMethodCallOptions<OrdinalLock>
+    )
+
+    console.log("Cancel call: ", callRes.tx.id);
+
+    // Remove market item.
+    removeMarketItem(marketItem.item.origin.outpoint)
+  }
+
+  const handleConnect = async () => {
+    const provider = new OrdiProvider(bsv.Networks.mainnet);
+    const signer = new PandaSigner(provider);
+
+    signerRef.current = signer;
+    const { isAuthenticated, error } = await signer.requestAuth()
+    if (!isAuthenticated) {
+      throw new Error(`Unauthenticated: ${error}`)
     }
+
+    setConnectedOrdiAddress(await signer.getOrdAddress())
+    setIsConnected(true)
+    loadWalletItems()
+  };
+
+  const handleTabChange = (e, tabIndex) => {
+    if (tabIndex == 0) {
+      loadWalletItems()
+    } else if (tabIndex == 1) {
+      loadMarketItems()
+    }
+    setActiveTab(tabIndex);
   };
 
   return (
     <div>
-      
-      <Card sx={{ minWidth: 2, m : 8, justifyContent: "center" }}>
-        <CardContent>
-          <Typography variant="h6" component="div">
-            Address : {Address}
-          </Typography>
-        </CardContent>
-      </Card>
-
-      <NewTask onAdd={handleAdd} />
-      <TaskList
-        tasks={contractInstance ? (contractInstance.tasks as Task[]) : []}
-        onCompleted={handleCompleted}
-      />
+      {isConnected ? (
+        <div style={{ padding: '20px' }}>
+          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+            <Tabs value={activeTab} onChange={handleTabChange}>
+              <Tab label="My NFT's" />
+              <Tab label="Market" />
+            </Tabs>
+          </Box>
+          {activeTab === 0 && (
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center' }}>
+              {walletItems.map((item, idx) => {
+                return <ItemViewWallet key={idx} item={item} idx={idx} onList={handleList} />
+              })}
+            </Box>
+          )}
+          {activeTab === 1 && (
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center' }}>
+              {Object.entries(marketItems).map(([key, val], idx) => {
+                const isMyListing = val.item.owner == connectedOrdiAddress.toString()
+                return <ItemViewMarket key={key} marketItem={val} isMyListing={isMyListing} idx={idx} onBuy={handleBuy} onCancel={handleCancel} />
+              })}
+            </Box>
+          )}
+        </div>
+      ) : (
+        <div style={{ height: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <Button variant="contained" size="large" onClick={handleConnect}>
+            Connect Panda Wallet
+          </Button>
+        </div>
+      )}
     </div>
   );
 };
