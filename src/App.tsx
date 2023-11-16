@@ -1,251 +1,132 @@
-// App.tsx
-import React, { useEffect, useRef, useState } from 'react';
-import { Addr, PandaSigner, PubKey, UTXO, bsv, findSig } from 'scrypt-ts';
-import { OneSatApis, OrdiMethodCallOptions, OrdiNFTP2PKH, OrdiProvider } from 'scrypt-ord';
-import { Box, Button, Tab, Tabs } from '@mui/material';
-import ItemViewWallet from './ItemViewWallet';
-import { OrdinalLock } from './contracts/ordinalLock';
-import ItemViewMarket from './ItemViewMarket';
-
+import React, { useRef, useState } from "react";
+import { Addr, PandaSigner, bsv } from "scrypt-ts";
+import {
+  OrdiMethodCallOptions,
+  OrdiNFTP2PKH,
+  OrdiProvider,
+  ContentType,
+} from "scrypt-ord";
+import { Button } from "@mui/material";
+import { DemoNFT } from "./contracts/mint";
+import { Wallet } from "@mui/icons-material";
 
 const App: React.FC = () => {
   const signerRef = useRef<PandaSigner>();
 
-  const [isConnected, setIsConnected] = useState(false)
+  const [isConnected, setIsConnected] = useState(false);
 
-  const [connectedOrdiAddress, setConnectedOrdiAddress] = useState(undefined)
+  const [image, setimage] = useState<string>("");
 
-  const [walletItems, setWalletItems] = useState([])
-  const [marketItems, setMarketItems] = useState([])
-
-  const [activeTab, setActiveTab] = useState(0);
-
-  useEffect(() => {
-    loadMarketItems()
-  }, []);
-
-  async function loadWalletItems() {
-    const signer = signerRef.current as PandaSigner;
-  
-    if (signer) {
-      try {
-        const connectedOrdiAddressStr = connectedOrdiAddress.toString();
-  
-        // Validate the Bitcoin address
-        if (!isValidBitcoinAddress(connectedOrdiAddressStr)) {
-          throw new Error('Invalid Bitcoin address');
-        }
-  
-        const url = `https://ordinals.gorillapool.io/api/txos/address/${connectedOrdiAddressStr}/unspent?bsv20=false`;
-  
-        const response = await fetch(url);
-  
-        if (!response.ok) {
-          throw new Error(`Failed to fetch data. Status: ${response.status}`);
-        }
-  
-        const data = await response.json();
-  
-        const filteredData = data
-          .filter(e => e.origin && e.origin.data && e.origin.data.insc && e.origin.data.insc.file && e.origin.data.insc.file.type !== 'application/bsv-20')
-          .filter(e => marketItems[e.origin.outpoint] === undefined);
-  
-        setWalletItems(filteredData);
-      } catch (error) {
-        console.error('Error fetching wallet items:', error.message);
-      }
-    }
-  }
-  
-  // Example address validation function
-  function isValidBitcoinAddress(address) {
-    // Implement your address validation logic here
-    // You may use a library or a regex to validate the address
-    return true; // Replace with your validation check
-  }
-  
-  
-  
-
-  async function loadMarketItems() {
-    const marketItemsRaw = localStorage.getItem('marketItems')
-    if (marketItemsRaw) {
-      const marketItems = JSON.parse(marketItemsRaw)
-      setMarketItems(marketItems)
-    }
-  }
-
-  function storeMarketItem(ordLockTx: bsv.Transaction, price: number, seller: string, item: any) {
-    let marketItems: any = localStorage.getItem('marketItems')
-    if (!marketItems) {
-      marketItems = {}
-    } else {
-      marketItems = JSON.parse(marketItems)
-    }
-
-    marketItems[item.origin.outpoint] = {
-      txId: ordLockTx.id,
-      vout: 0,
-      price: price,
-      seller: seller,
-      item: item
-    }
-
-    localStorage.setItem('marketItems', JSON.stringify(marketItems));
-    setMarketItems(marketItems)
-  }
-
-  function removeMarketItem(originOutpoint: string) {
-    let marketItems: any = localStorage.getItem('marketItems')
-    if (!marketItems) {
-      marketItems = {}
-    } else {
-      marketItems = JSON.parse(marketItems)
-    }
-
-    delete marketItems[originOutpoint]
-
-    localStorage.setItem('marketItems', JSON.stringify(marketItems));
-    setMarketItems(marketItems)
-  }
-
-  const handleList = async (idx: number, priceSats: number) => {
-    const signer = signerRef.current as PandaSigner;
-
-    const item = walletItems[idx]
-    const outpoint = item.outpoint
-
-    // Create a P2PKH object from a UTXO.
-    OneSatApis.setNetwork(bsv.Networks.testnet)
-    const utxo: UTXO = await OneSatApis.fetchUTXOByOutpoint(outpoint)
-    const p2pkh = OrdiNFTP2PKH.fromUTXO(utxo)
-
-    // Construct recipient smart contract - the ordinal lock.
-    const ordPublicKey = await signer.getOrdPubKey()
-    const seller = PubKey(ordPublicKey.toByteString())
-    const amount = BigInt(priceSats)
-    const ordLock = new OrdinalLock(seller, amount)
-    await ordLock.connect(signer)
-
-    // Unlock deployed NFT and send it to the recipient ordinal lock contract.
-    await p2pkh.connect(signer)
-
-    const { tx: transferTx } = await p2pkh.methods.unlock(
-      (sigResps) => findSig(sigResps, ordPublicKey),
-      seller,
-      {
-        transfer: ordLock,
-        pubKeyOrAddrToSign: ordPublicKey,
-      } as OrdiMethodCallOptions<OrdiNFTP2PKH>
-    );
-
-    console.log("Transferred NFT: ", transferTx.id);
-
-    // Store reference in local storage.
-    storeMarketItem(transferTx, priceSats, seller, item)
-  };
-
-  const handleBuy = async (marketItem: any) => {
-    const signer = signerRef.current as PandaSigner;
-    await signer.connect()
-
-    const tx = await signer.provider.getTransaction(marketItem.txId)
-    const instance = OrdinalLock.fromTx(tx, 0)
-
-    await instance.connect(signer)
-
-    const buyerPublicKey = await signer.getOrdPubKey()
-    
-    const receiverAddr = Addr(buyerPublicKey.toAddress().toByteString())
-    
-    const callRes = await instance.methods.purchase(
-      receiverAddr
-    )
-
-    console.log("Purchase call: ", callRes.tx.id);
-
-    // Remove market item.
-    removeMarketItem(marketItem.item.origin.outpoint)
-  }
-
-  const handleCancel = async (marketItem: any) => {
-    const signer = signerRef.current as PandaSigner;
-    await signer.connect()
-
-    const tx = await signer.provider.getTransaction(marketItem.txId)
-    const instance = OrdinalLock.fromTx(tx, 0)
-
-    await instance.connect(signer)
-
-    const sellerPublicKey = await signer.getOrdPubKey()
-
-    const callRes = await instance.methods.cancel(
-      (sigResps) => findSig(sigResps, sellerPublicKey),
-      {
-        pubKeyOrAddrToSign: sellerPublicKey,
-      } as OrdiMethodCallOptions<OrdinalLock>
-    )
-
-    console.log("Cancel call: ", callRes.tx.id);
-
-    // Remove market item.
-    removeMarketItem(marketItem.item.origin.outpoint)
-  }
-
-  const handleConnect = async () => {
-    const provider = new OrdiProvider(bsv.Networks.mainnet);
+  async function connect() {
+    const provider = new OrdiProvider(bsv.Networks.testnet);
     const signer = new PandaSigner(provider);
 
     signerRef.current = signer;
-    const { isAuthenticated, error } = await signer.requestAuth()
+    const { isAuthenticated, error } = await signer.requestAuth();
     if (!isAuthenticated) {
-      throw new Error(`Unauthenticated: ${error}`)
+      throw new Error(`Unauthenticated: ${error}`);
     }
 
-    setConnectedOrdiAddress(await signer.getOrdAddress())
-    setIsConnected(true)
-    loadWalletItems()
+    setIsConnected(true);
+  }
+
+  const handleConnect = async () => {
+    await connect();
   };
 
-  const handleTabChange = (e, tabIndex) => {
-    if (tabIndex == 0) {
-      loadWalletItems()
-    } else if (tabIndex == 1) {
-      loadMarketItems()
+  const mint = async () => {
+    try {
+      const signer = signerRef.current as PandaSigner;
+      await signer.connect();
+      const address = (await signer.getOrdAddress()).toByteString();
+      let instance = new DemoNFT(1n, 1n);
+      await instance.connect(signer);
+  
+      const inscriptionTx = await instance.inscribeImage(image, ContentType.JPG);
+  
+      console.log("Inscription TXID: ", inscriptionTx.id);
+  
+  
+      // 5-second delay before transferring
+      setTimeout(async () => {
+        try {
+          const { tx: unlockTx } = await instance.methods.unlock(2n, {
+            transfer: new OrdiNFTP2PKH(Addr(address)),
+          } as OrdiMethodCallOptions<DemoNFT>);
+  
+          console.log("Unlocked NFT: ", unlockTx.id);
+        } catch (unlockError) {
+          console.error("Error during unlock:", unlockError);
+        }
+      }, 5000); // 5000 milliseconds = 5 seconds
+    } catch (error) {
+      console.error("Error in mint function:", error);
     }
-    setActiveTab(tabIndex);
+  };
+  
+  
+  const handleFileInput = (event) => {
+    const file = event.target.files[0];
+
+    if (file) {
+      const reader = new FileReader();
+
+      reader.onload = (e) => {
+        if (e.target.result instanceof ArrayBuffer) {
+          const uint8Array = new Uint8Array(e.target.result);
+          const base64Data = btoa(String.fromCharCode.apply(null, uint8Array));
+          // Now, 'base64Data' contains the base64-encoded image data
+          console.log(base64Data);
+          setimage(base64Data);
+          const imageElement = document.getElementById(
+            "imagePreview"
+          ) as HTMLImageElement;
+          imageElement.src = `data:image/jpg;base64, ${base64Data}`;
+        } else {
+          console.error("Unsupported data type");
+        }
+        // Update the state with the base64 data
+      };
+
+      reader.readAsArrayBuffer(file);
+    }
   };
 
   return (
     <div>
       {isConnected ? (
-        <div style={{ padding: '20px' }}>
-          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-            <Tabs value={activeTab} onChange={handleTabChange}>
-              <Tab label="My NFT's" />
-              <Tab label="Market" />
-            </Tabs>
-          </Box>
-          {activeTab === 0 && (
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center' }}>
-              {walletItems.map((item, idx) => {
-                return <ItemViewWallet key={idx} item={item} idx={idx} onList={handleList} />
-              })}
-            </Box>
-          )}
-          {activeTab === 1 && (
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center' }}>
-              {Object.entries(marketItems).map(([key, val], idx) => {
-                const isMyListing = val.item.owner == connectedOrdiAddress.toString()
-                return <ItemViewMarket key={key} marketItem={val} isMyListing={isMyListing} idx={idx} onBuy={handleBuy} onCancel={handleCancel} />
-              })}
-            </Box>
-          )}
+        <div style={{ padding: "25px" }}>
+          
+          <br />
+          <input type="file" onChange={handleFileInput} />
+          <br />
+
+          <img id="imagePreview" alt="preview" height={400} width={350} />
+          <br />
+
+          <Button
+            variant="contained"
+            color="success"
+            onClick={mint}
+            sx={{ marginTop: 2 }}>
+            Mint & Transfer
+          </Button>
         </div>
       ) : (
-        <div style={{ height: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          <Button variant="contained" size="large" onClick={handleConnect}>
-            Connect Panda Wallet
+        <div
+          style={{
+            height: "100vh",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+          }}>
+          <Button
+            startIcon={<Wallet />}
+            variant="contained"
+            color="success"
+            size="large"
+            onClick={handleConnect}>
+            Connect Wallet
           </Button>
         </div>
       )}

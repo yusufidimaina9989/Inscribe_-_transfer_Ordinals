@@ -5,18 +5,18 @@ import App from './App';
 import reportWebVitals from './reportWebVitals';
 import { PandaProvider } from 'panda-wallet-provider/dist/context/PandaWalletContext';
 
-import { OrdinalLock } from './contracts/ordinalLock';
-import artifact from '../artifacts/ordinalLock.json';
+import { DemoNFT } from './contracts/mint';
+import artifact from '../artifacts/mint.json';
 
-OrdinalLock.loadArtifact(artifact);
+DemoNFT.loadArtifact(artifact);
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );
 root.render(
-  <PandaProvider>
-  <App />
-</PandaProvider>
+<React.StrictMode>
+    <App />
+  </React.StrictMode>
 );
 
 // If you want to start measuring performance in your app, pass a function
